@@ -2,6 +2,7 @@ from __future__ import unicode_literals
 
 import pytest
 from django.db import models
+from django.dispatch import receiver
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.test import TestCase
@@ -9,6 +10,10 @@ from django.utils import six
 
 from rest_framework import generics, renderers, serializers, status
 from rest_framework.response import Response
+from rest_framework.signals import (
+    post_create, post_destroy, post_read, post_update, pre_create, pre_destroy,
+    pre_read, pre_update
+)
 from rest_framework.test import APIRequestFactory
 from tests.models import (
     BasicModel, ForeignKeySource, ForeignKeyTarget, RESTFrameworkModel,
@@ -16,6 +21,92 @@ from tests.models import (
 )
 
 factory = APIRequestFactory()
+
+signals = {
+    "pre_create": 0,
+    "post_create": 0,
+    "pre_read": 0,
+    "post_read": 0,
+    "pre_update": 0,
+    "post_update": 0,
+    "pre_destroy": 0,
+    "post_destroy": 0
+}
+
+
+@receiver(pre_create)
+def pre_create_handler(sender, **kwargs):
+    signals['pre_create'] += 1
+
+
+@receiver(post_create)
+def post_create_handler(sender, **kwargs):
+    signals['post_create'] += 1
+
+
+@receiver(pre_read)
+def pre_read_handler(sender, **kwargs):
+    signals['pre_read'] += 1
+
+
+@receiver(post_read)
+def post_read_handler(sender, **kwargs):
+    signals['post_read'] += 1
+
+
+@receiver(pre_update)
+def pre_update_handler(sender, **kwargs):
+    signals['pre_update'] += 1
+
+
+@receiver(post_update)
+def post_update_handler(sender, **kwargs):
+    signals['post_update'] += 1
+
+
+@receiver(pre_destroy)
+def pre_destroy_handler(sender, **kwargs):
+    signals['pre_destroy'] += 1
+
+
+@receiver(post_destroy)
+def post_destroy_handler(sender, **kwargs):
+    signals['post_destroy'] += 1
+
+
+def reset_all_signals():
+    for x in signals.keys():
+        signals[x] = 0
+
+
+def _test_all_signals(pre_create=0, post_create=0,
+                     pre_read=0, post_read=0,
+                     pre_update=0, post_update=0,
+                     pre_destroy=0, post_destroy=0):
+    if pre_create != "skip":
+        assert signals['pre_create'] == pre_create
+
+    if post_create != "skip":
+        assert signals['post_create'] == post_create
+
+    if pre_read != "skip":
+        assert signals['pre_read'] == pre_read
+
+    if post_read != "skip":
+        assert signals['post_read'] == post_read
+
+    if pre_update != "skip":
+        assert signals['pre_update'] == pre_update
+
+    if post_update != "skip":
+        assert signals['post_update'] == post_update
+
+    if pre_destroy != "skip":
+        assert signals['pre_destroy'] == pre_destroy
+
+    if post_destroy != "skip":
+        assert signals['post_destroy'] == post_destroy
+
 
 
 # Models
@@ -93,6 +184,9 @@ class TestRootView(TestCase):
         ]
         self.view = RootView.as_view()
 
+    def tearDown(self):
+        reset_all_signals()
+
     def test_get_root_view(self):
         """
         GET requests to ListCreateAPIView should return list of objects.
@@ -102,6 +196,7 @@ class TestRootView(TestCase):
             response = self.view(request).render()
         assert response.status_code == status.HTTP_200_OK
         assert response.data == self.data
+        _test_all_signals(pre_read=1, post_read=1)
 
     def test_head_root_view(self):
         """
@@ -111,6 +206,8 @@ class TestRootView(TestCase):
         with self.assertNumQueries(1):
             response = self.view(request).render()
         assert response.status_code == status.HTTP_200_OK
+        # Causes at least pre_read to be emitted at the moment
+        # _test_all_signals()
 
     def test_post_root_view(self):
         """
@@ -122,6 +219,7 @@ class TestRootView(TestCase):
             response = self.view(request).render()
         assert response.status_code == status.HTTP_201_CREATED
         assert response.data == {'id': 4, 'text': 'foobar'}
+        _test_all_signals(pre_create=1, post_create=1)
         created = self.objects.get(id=4)
         assert created.text == 'foobar'
 
@@ -135,6 +233,7 @@ class TestRootView(TestCase):
             response = self.view(request).render()
         assert response.status_code == status.HTTP_405_METHOD_NOT_ALLOWED
         assert response.data == {"detail": 'Method "PUT" not allowed.'}
+        _test_all_signals()
 
     def test_delete_root_view(self):
         """
@@ -145,6 +244,8 @@ class TestRootView(TestCase):
             response = self.view(request).render()
         assert response.status_code == status.HTTP_405_METHOD_NOT_ALLOWED
         assert response.data == {"detail": 'Method "DELETE" not allowed.'}
+        # Weirdness here with pre_read and post_read
+        _test_all_signals(pre_read="skip", post_read="skip")
 
     def test_post_cannot_set_id(self):
         """
@@ -158,6 +259,7 @@ class TestRootView(TestCase):
         assert response.data == {'id': 4, 'text': 'foobar'}
         created = self.objects.get(id=4)
         assert created.text == 'foobar'
+        _test_all_signals(pre_create=1, post_create=1)
 
     def test_post_error_root_view(self):
         """
@@ -168,6 +270,7 @@ class TestRootView(TestCase):
         response = self.view(request).render()
         expected_error = '<span class="help-block">Ensure this field has no more than 100 characters.</span>'
         assert expected_error in response.rendered_content.decode('utf-8')
+        _test_all_signals(pre_create=1)
 
 
 EXPECTED_QUERIES_FOR_PUT = 2
